@@ -4,11 +4,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
-from .models import Category, Shop, Product, Order, OrderItem
+from .models import Category, Shop, Product, Order, OrderItem, Wishlist
 from .serializers import CategorySerializer, ShopSerializer, ProductSerializer, UserSerializer, OrderSerializer, OrderItemSerializer
 from .models import UserProfile # Add this to your imports!
 from .models import Address
-from .serializers import AddressSerializer
+from .serializers import AddressSerializer, WishlistSerializer
 
 
 class RegisterView(APIView):
@@ -237,3 +237,41 @@ class OrderHistoryView(APIView):
             })
             
         return Response(data)
+    
+class WishlistView(APIView):
+    permission_classes = [IsAuthenticated] # User MUST be logged in
+
+    def get(self, request):
+        # 1. Get all wishlist items for this specific user
+        wishlist_items = Wishlist.objects.filter(user=request.user)
+        serializer = WishlistSerializer(wishlist_items, many=True)
+        
+        # 2. Clean the data: Extract JUST the product objects
+        # This makes it perfectly match your React Native frontend structure!
+        products = [item['product'] for item in serializer.data]
+        
+        return Response(products, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        # 1. Get the product ID sent from React Native
+        product_id = request.data.get('product_id')
+        if not product_id:
+            return Response({"error": "Product ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 2. Find the product in the database
+        try:
+            product = Product.objects.get(id=product_id)
+        except Product.DoesNotExist:
+            return Response({"error": "Product not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # 3. Check if this product is ALREADY in the user's wishlist
+        wishlist_item = Wishlist.objects.filter(user=request.user, product=product).first()
+        
+        if wishlist_item:
+            # If it exists, TOGGLE IT OFF (Delete it)
+            wishlist_item.delete()
+            return Response({"message": "Removed from wishlist", "added": False}, status=status.HTTP_200_OK)
+        else:
+            # If it doesn't exist, TOGGLE IT ON (Create it)
+            Wishlist.objects.create(user=request.user, product=product)
+            return Response({"message": "Added to wishlist", "added": True}, status=status.HTTP_201_CREATED)

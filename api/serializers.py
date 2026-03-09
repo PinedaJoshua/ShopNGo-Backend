@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import Category, Shop, Product, Order, OrderItem, UserProfile, Address
+from .models import Category, Shop, Product, Order, OrderItem, UserProfile, Address, Wishlist
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -61,3 +61,11 @@ class AddressSerializer(serializers.ModelSerializer):
     class Meta:
         model = Address
         fields = ['id', 'label', 'phone_number', 'full_address', 'is_default']
+
+class WishlistSerializer(serializers.ModelSerializer):
+    # This pulls the full product data instead of just the ID
+    product = ProductSerializer(read_only=True) 
+
+    class Meta:
+        model = Wishlist
+        fields = ['id', 'product', 'created_at']
