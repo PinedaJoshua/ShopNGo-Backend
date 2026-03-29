@@ -31,32 +31,47 @@ class ShopSerializer(serializers.ModelSerializer):
         model = Shop
         fields = ['id', 'name', 'category']
 
+from rest_framework import serializers
+from .models import Product
+
 class ProductSerializer(serializers.ModelSerializer):
-    # This ensures the API sends the shop's name (e.g., "Local Meats") 
-    # instead of just the shop's ID number, which the frontend expects!
-    shop = serializers.StringRelatedField() 
+    shop = serializers.ReadOnlyField(source='shop.name')
+    category = serializers.ReadOnlyField(source='category.name')
+    image_url = serializers.SerializerMethodField() 
 
     class Meta:
         model = Product
-        # --- UPDATED: Added category, description, image_url, and stock_quantity ---
         fields = [
-            'id', 'title', 'shop', 'category', 'price', 
-            'oldPrice', 'rating', 'description', 'image_url', 'stock_quantity'
+            'id', 'title', 'shop', 'category', 'description', 
+            'price', 'stock_quantity', 'rating', 'image_url'
         ]
 
+    def get_image_url(self, obj):
+        if obj.image_url:
+            return obj.image_url.url
+        return None
+
 class OrderItemSerializer(serializers.ModelSerializer):
-    product_id = serializers.ReadOnlyField(source='product.id')
+    product_id = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.all(), 
+        source='product'
+    )
     title = serializers.ReadOnlyField(source='product.title')
     price = serializers.ReadOnlyField(source='product.price')
     shop = serializers.StringRelatedField(source='product.shop') 
     
-    # Optional but helpful: Added image_url so the cart screen can show product images!
-    image_url = serializers.ReadOnlyField(source='product.image_url')
+    # 🚨 CHANGED: We use a MethodField to handle the Image URL safely
+    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = OrderItem
-        # --- UPDATED: Added image_url to the cart items ---
         fields = ['id', 'product_id', 'title', 'price', 'shop', 'quantity', 'image_url']
+
+    # This function safely gets the URL of the image as a string
+    def get_image_url(self, obj):
+        if obj.product.image_url:
+            return obj.product.image_url.url # Returns "/media/products/img.jpg"
+        return None
 
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
@@ -77,3 +92,48 @@ class WishlistSerializer(serializers.ModelSerializer):
     class Meta:
         model = Wishlist
         fields = ['id', 'product', 'created_at']
+
+class ShopSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Shop
+        fields = ['id', 'name', 'category']
+
+class AdminCreateMerchantSerializer(serializers.ModelSerializer):
+    shop = ShopSerializer()
+
+    class Meta:
+        model = User
+        fields = ['username', 'password', 'email', 'shop']
+
+    def create(self, validated_data):
+        shop_data = validated_data.pop('shop')
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            email=validated_data.get('email', ''),
+            password=validated_data['password']
+        )
+        Shop.objects.create(user=user, **shop_data)
+        return user
+
+
+
+class MerchantOrderItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source='product.title', read_only=True)
+    product_price = serializers.DecimalField(source='product.price', max_digits=10, decimal_places=2, read_only=True)
+    order_id = serializers.IntegerField(source='order.id', read_only=True)
+    customer_name = serializers.CharField(source='order.user.first_name', read_only=True)
+    address = serializers.CharField(source='order.address_text', read_only=True)
+    status = serializers.CharField(source='order.status', read_only=True)
+    order_date = serializers.DateTimeField(source='order.created_at', format="%Y-%m-%d %H:%M", read_only=True)
+
+    class Meta:
+        model = OrderItem
+        fields = [
+            'id', 'order_id', 'product_name', 'quantity', 'product_price', 
+            'customer_name', 'address', 'status', 'order_date'
+        ]
+
+class OrderStatusUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Order
+        fields = ['status']

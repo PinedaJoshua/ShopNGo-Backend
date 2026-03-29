@@ -9,6 +9,15 @@ from .serializers import CategorySerializer, ShopSerializer, ProductSerializer, 
 from .models import UserProfile # Add this to your imports!
 from .models import Address
 from .serializers import AddressSerializer, WishlistSerializer
+from .serializers import (
+    AdminCreateMerchantSerializer, ShopSerializer, ProductSerializer, 
+    MerchantOrderItemSerializer, OrderStatusUpdateSerializer
+)
+from django.contrib.auth.models import User
+from rest_framework import generics
+from rest_framework.permissions import IsAuthenticated
+from .models import Shop, Product, Order, OrderItem
+
 
 
 class RegisterView(APIView):
@@ -277,3 +286,82 @@ class WishlistView(APIView):
             # If it doesn't exist, TOGGLE IT ON (Create it)
             Wishlist.objects.create(user=request.user, product=product)
             return Response({"message": "Added to wishlist", "added": True}, status=status.HTTP_201_CREATED)
+        
+class AdminCreateMerchantView(generics.CreateAPIView):
+    queryset = User.objects.all()
+    serializer_class = AdminCreateMerchantSerializer
+
+class AdminMerchantListView(generics.ListAPIView):
+    queryset = Shop.objects.all()
+    serializer_class = ShopSerializer
+    permission_classes = [IsAuthenticated]
+
+from rest_framework.exceptions import ValidationError
+
+class ProductListCreateView(generics.ListCreateAPIView):
+    serializer_class = ProductSerializer
+    permission_classes = [IsAuthenticated] 
+
+    def get_queryset(self):
+        # Filters products so merchants only see their own items
+        return Product.objects.filter(shop__user=self.request.user)
+
+    def perform_create(self, serializer):
+        # SAFETY CHECK: Ensure the user actually has a shop profile
+        try:
+            merchant_shop = self.request.user.shop
+            if merchant_shop is None:
+                raise ValidationError({"detail": "You do not have a merchant shop profile linked to this account."})
+            
+            # Attach the shop and save the product
+            serializer.save(shop=merchant_shop)
+        except AttributeError:
+            raise ValidationError({"detail": "This user account is not registered as a Merchant."})
+
+class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = ProductSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Product.objects.filter(shop__user=self.request.user)
+
+class MerchantProfileDetailView(generics.RetrieveUpdateAPIView):
+    serializer_class = ShopSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user.shop
+    
+class MerchantOrderListView(generics.ListAPIView):
+    serializer_class = MerchantOrderItemSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return OrderItem.objects.filter(
+            product__shop__user=self.request.user,
+            order__is_completed=True
+        ).order_by('-order__created_at')
+
+class MerchantOrderStatusUpdateView(generics.UpdateAPIView):
+    queryset = Order.objects.all()
+    serializer_class = OrderStatusUpdateSerializer
+
+    def patch(self, request, *args, **kwargs):
+        order = self.get_object()
+        new_status = request.data.get('status')
+        old_status = order.status
+
+        # 🚨 TRIGGER: Deduct stock when item leaves the shop
+        if new_status in ['Out for Delivery', 'Delivered'] and old_status not in ['Out for Delivery', 'Delivered']:
+            for item in order.items.all():  # Uses the 'items' related_name
+                product = item.product
+                if product.stock_quantity >= item.quantity:
+                    product.stock_quantity -= item.quantity
+                    product.save()
+                else:
+                    return Response(
+                        {"error": f"Insufficient stock for {product.title}"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+        return super().patch(request, *args, **kwargs)

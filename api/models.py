@@ -3,7 +3,7 @@ from django.db import models
 
 class Category(models.Model):
     name = models.CharField(max_length=100)
-    icon = models.CharField(max_length=50)
+    icon = models.CharField(max_length=50, default="grid") 
 
     def __str__(self):
         return self.name
@@ -26,7 +26,7 @@ class Product(models.Model):
     
     # --- ADDED FOR THE WEBSITE MERCHANTS ---
     description = models.TextField(blank=True, null=True)
-    image_url = models.URLField(max_length=500, blank=True, null=True)
+    image_url = models.ImageField(upload_to='products/', null=True, blank=True)
     stock_quantity = models.IntegerField(default=0)
 
     def __str__(self):
@@ -38,6 +38,7 @@ class Order(models.Model):
         ('Preparing', 'Preparing'),
         ('Out for Delivery', 'Out for Delivery'),
         ('Delivered', 'Delivered'),
+        ('Confirmed', 'Confirmed'),
     ]
     
     user = models.ForeignKey(User, on_delete=models.CASCADE)

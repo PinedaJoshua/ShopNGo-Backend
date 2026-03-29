@@ -17,4 +17,16 @@ urlpatterns = [
     path('addresses/<int:pk>/', views.AddressDetailView.as_view(), name='address-detail'),
     path('orders/', views.OrderHistoryView.as_view(), name='order-history'),
     path('wishlist/', views.WishlistView.as_view(), name='wishlist'),
+
+    # --- ADMIN ENDPOINTS ---
+    path('admin/create-merchant/', views.AdminCreateMerchantView.as_view(), name='create-merchant'),
+    path('admin/merchants/', views.AdminMerchantListView.as_view(), name='admin-merchant-list'), 
+
+    # --- MERCHANT ENDPOINTS ---
+    path('merchant/profile/', views.MerchantProfileDetailView.as_view(), name='merchant-profile'),
+    path('merchant/products/', views.ProductListCreateView.as_view(), name='product-list-create'),
+    path('merchant/products/<int:pk>/', views.ProductDetailView.as_view(), name='product-detail'),
+    path('merchant/orders/', views.MerchantOrderListView.as_view(), name='merchant-orders'),
+    path('merchant/orders/<int:pk>/status/', views.MerchantOrderStatusUpdateView.as_view(), name='merchant-order-status'),
 ]
+
