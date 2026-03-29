@@ -197,17 +197,19 @@ class AddressDetailView(APIView):
 
     def delete(self, request, pk):
         try:
+            # Look for the address specifically belonging to the logged-in user
             address = Address.objects.get(pk=pk, user=request.user)
             was_default = address.is_default
             address.delete()
 
+            # If they deleted their default address, set a new one automatically
             if was_default:
                 next_addr = Address.objects.filter(user=request.user).first()
                 if next_addr:
                     next_addr.is_default = True
                     next_addr.save()
 
-            return Response({"message": "Address deleted"}, status=status.HTTP_204_NO_CONTENT)
+            return Response(status=status.HTTP_204_NO_CONTENT)
         except Address.DoesNotExist:
             return Response({"error": "Address not found"}, status=status.HTTP_404_NOT_FOUND)
         

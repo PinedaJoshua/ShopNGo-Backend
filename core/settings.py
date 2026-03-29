@@ -79,8 +79,16 @@ WSGI_APPLICATION = 'core.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'shopngo_db',      # The exact name you just typed in phpMyAdmin
+        'USER': 'root',            # XAMPP's default username
+        'PASSWORD': '',            # XAMPP's default password is intentionally blank
+        'HOST': '127.0.0.1',       # Tells Django the database is on this laptop
+        'PORT': '3306',            # The default MySQL port
+        'OPTIONS': {
+            # This helps prevent the strict MariaDB version errors!
+            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+        },
     }
 }
 

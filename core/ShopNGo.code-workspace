@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "../../ShopNGo"
+		},
+		{
+			"path": ".."
+		}
+	],
+	"settings": {
+		"liveServer.settings.multiRootWorkspaceName": "ShopNGo"
+	}
+}
