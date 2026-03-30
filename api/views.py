@@ -1,14 +1,25 @@
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth import authenticate
+from django.contrib.auth.models import User
 from rest_framework.authtoken.models import Token
-from .models import Category, Shop, Product, Order, OrderItem, Wishlist
-from .serializers import CategorySerializer, ShopSerializer, ProductSerializer, UserSerializer, OrderSerializer, OrderItemSerializer
-from .models import UserProfile # Add this to your imports!
-from .models import Address
-from .serializers import AddressSerializer, WishlistSerializer
+from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import MultiPartParser, FormParser
+
+from .models import (
+    Category, Shop, Product, Order, OrderItem, 
+    Wishlist, Review, UserProfile, Address
+)
+from .serializers import (
+    CategorySerializer, ShopSerializer, ProductSerializer, 
+    UserSerializer, OrderSerializer, OrderItemSerializer,
+    ReviewSerializer, AddressSerializer, WishlistSerializer,
+    AdminCreateMerchantSerializer, MerchantOrderItemSerializer, 
+    OrderStatusUpdateSerializer
+)
+
 
 
 class RegisterView(APIView):
@@ -115,34 +126,39 @@ class CheckoutView(APIView):
         try:
             active_order = Order.objects.get(user=request.user, is_completed=False)
             item_ids = request.data.get('item_ids', [])
-            # NEW: Get the address text sent from the frontend
-            selected_address_text = request.data.get('address_text', "")
+            selected_address_text = request.data.get('address_text', "No Address Provided")
 
             if not item_ids:
                 return Response({"error": "No items selected."}, status=status.HTTP_400_BAD_REQUEST)
 
             items_to_checkout = active_order.items.filter(id__in=item_ids)
+            order_id = None
 
             # Scenario A: Full Checkout
             if items_to_checkout.count() == active_order.items.count():
                 active_order.is_completed = True
-                active_order.address_text = selected_address_text # Save address
+                active_order.address_text = selected_address_text
                 active_order.status = 'Pending'
                 active_order.save()
+                order_id = active_order.id
             
-            # Scenario B: Partial Checkout
+            # Scenario B: Partial Checkout (User only selected some items in cart)
             else:
                 new_order = Order.objects.create(
                     user=request.user, 
                     is_completed=True, 
-                    address_text=selected_address_text, # Save address
+                    address_text=selected_address_text, 
                     status='Pending'
                 )
                 for item in items_to_checkout:
                     item.order = new_order
                     item.save()
+                order_id = new_order.id
 
-            return Response({"message": "Order placed successfully!"}, status=status.HTTP_200_OK)
+            return Response({
+                "message": "Order placed successfully!",
+                "order_id": order_id  # 🚨 This is what the Success Screen needs
+            }, status=status.HTTP_200_OK)
 
         except Order.DoesNotExist:
             return Response({"error": "No active cart."}, status=status.HTTP_404_NOT_FOUND)
@@ -217,23 +233,25 @@ class OrderHistoryView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        orders = Order.objects.filter(user=request.user, is_completed=True).order_by('created_at')
-        
-        # We can reuse your existing OrderSerializer or make a detailed one
+        orders = Order.objects.filter(user=request.user, is_completed=True).order_by('-created_at')
         data = []
         for order in orders:
             items = []
             for item in order.items.all():
                 items.append({
+                    "id": item.product.id,
                     "title": item.product.title,
                     "quantity": item.quantity,
-                    "price": float(item.product.price)
+                    "price": float(item.product.price),
+                    "shop": item.product.shop.name,
+                    "shop_id": item.product.shop.id, 
                 })
             
             data.append({
                 "id": order.id,
                 "status": order.status,
                 "date": order.created_at.strftime("%b %d, %Y"),
+                "address_text": order.address_text, # Ensure this is passed to the app
                 "total": sum(i['price'] * i['quantity'] for i in items) + 50, # Items + Delivery Fee
                 "items": items
             })
@@ -277,3 +295,132 @@ class WishlistView(APIView):
             # If it doesn't exist, TOGGLE IT ON (Create it)
             Wishlist.objects.create(user=request.user, product=product)
             return Response({"message": "Added to wishlist", "added": True}, status=status.HTTP_201_CREATED)
+        
+class AdminCreateMerchantView(generics.CreateAPIView):
+    queryset = User.objects.all()
+    serializer_class = AdminCreateMerchantSerializer
+
+class AdminMerchantListView(generics.ListAPIView):
+    queryset = Shop.objects.all()
+    serializer_class = ShopSerializer
+    permission_classes = [IsAuthenticated]
+
+from rest_framework.exceptions import ValidationError
+
+class ProductListCreateView(generics.ListCreateAPIView):
+    serializer_class = ProductSerializer
+    permission_classes = [IsAuthenticated] 
+
+    def get_queryset(self):
+        # Filters products so merchants only see their own items
+        return Product.objects.filter(shop__user=self.request.user)
+
+    def perform_create(self, serializer):
+        # SAFETY CHECK: Ensure the user actually has a shop profile
+        try:
+            merchant_shop = self.request.user.shop
+            if merchant_shop is None:
+                raise ValidationError({"detail": "You do not have a merchant shop profile linked to this account."})
+            
+            # Attach the shop and save the product
+            serializer.save(shop=merchant_shop)
+        except AttributeError:
+            raise ValidationError({"detail": "This user account is not registered as a Merchant."})
+
+class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = ProductSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Product.objects.filter(shop__user=self.request.user)
+
+class MerchantProfileDetailView(generics.RetrieveUpdateAPIView):
+    serializer_class = ShopSerializer
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_object(self):
+        return self.request.user.shop
+
+    def patch(self, request, *args, **kwargs):
+        return self.partial_update(request, *args, **kwargs)
+    
+class MerchantOrderListView(generics.ListAPIView):
+    serializer_class = MerchantOrderItemSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return OrderItem.objects.filter(
+            product__shop__user=self.request.user,
+            order__is_completed=True
+        ).order_by('-order__created_at')
+
+class MerchantOrderStatusUpdateView(generics.UpdateAPIView):
+    queryset = Order.objects.all()
+    serializer_class = OrderStatusUpdateSerializer
+
+    def patch(self, request, *args, **kwargs):
+        order = self.get_object()
+        new_status = request.data.get('status')
+        old_status = order.status
+
+        # 🚨 TRIGGER: Deduct stock when item leaves the shop
+        if new_status in ['Out for Delivery', 'Delivered'] and old_status not in ['Out for Delivery', 'Delivered']:
+            for item in order.items.all():  # Uses the 'items' related_name
+                product = item.product
+                if product.stock_quantity >= item.quantity:
+                    product.stock_quantity -= item.quantity
+                    product.save()
+                else:
+                    return Response(
+                        {"error": f"Insufficient stock for {product.title}"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+        return super().patch(request, *args, **kwargs)
+    
+class ProductReviewView(APIView):
+    # This allows public GET but protected POST
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
+    def get(self, request, product_id):
+        reviews = Review.objects.filter(product_id=product_id).order_by('-created_at')
+        serializer = ReviewSerializer(reviews, many=True)
+        return Response(serializer.data)
+
+    def post(self, request, product_id):
+        user = request.user
+        
+        # 🚨 VERIFICATION: Check if user has a 'Confirmed' order for this specific product
+        has_purchased = OrderItem.objects.filter(
+            order__user=user,
+            product_id=product_id,
+            order__status='Confirmed'
+        ).exists()
+
+        if not has_purchased:
+            return Response(
+                {"error": "You must purchase and receive this item before leaving a review."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Prevent duplicate reviews
+        if Review.objects.filter(user=user, product_id=product_id).exists():
+            return Response(
+                {"error": "You have already reviewed this product."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = ReviewSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(user=user, product_id=product_id)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+class ShopDetailView(generics.RetrieveAPIView):
+    queryset = Shop.objects.all()
+    serializer_class = ShopSerializer
+    permission_classes = [AllowAny]
